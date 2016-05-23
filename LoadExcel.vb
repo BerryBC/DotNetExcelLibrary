@@ -31,11 +31,11 @@ Public Class LoadExcel
     Private Function ConnectionString(ByVal FileName As String) As String
         Dim Builder As New OleDb.OleDbConnectionStringBuilder
         If IO.Path.GetExtension(FileName).ToUpper = ".XLS" Then
-            Builder.Provider = "Microsoft.ACE.OLEDB.12.0"
-            Builder.Add("Extended Properties", "Excel 8.0;IMEX=1;HDR=Yes;")
+            Builder.Provider = "Microsoft.Jet.OLEDB.4.0"
+            Builder.Add("Extended Properties", "Excel 8.0;IMEX=6;HDR=Yes;")
         ElseIf IO.Path.GetExtension(FileName).ToUpper = ".XLSX" Then
             Builder.Provider = "Microsoft.ACE.OLEDB.12.0"
-            Builder.Add("Extended Properties", "Excel 12.0;IMEX=1;HDR=Yes;")
+            Builder.Add("Extended Properties", "Excel 12.0;IMEX=6;HDR=Yes;")
         End If
 
         Builder.DataSource = FileName
@@ -125,6 +125,222 @@ Public Class LoadExcel
 
     End Function
 
+    Public Function SaveAsNewFromDatatable(ByRef dtFromData As DataTable, ByRef strSheetName As String) As Boolean
+        Dim Success As Boolean = True
+        Dim xlApp As Excel.Application = Nothing
+        Dim xlWorkBook As Excel.Workbook = Nothing
+        Dim xlWorkSheet As Excel.Worksheet = Nothing
+        Dim dcCol As DataColumn
+        Dim i As Integer
+        Dim Connection_String As String = ""
+        Dim intHowManyCol As Integer
+        Dim strTmpValues As String = ""
+        Dim cnConnection As OleDb.OleDbConnection
+        Dim adaptData As New OleDbDataAdapter
+        Dim dtData As DataTable
+        Dim drDataOrg As DataRow
+
+        Try
+            xlApp = New Excel.Application
+            xlApp.DisplayAlerts = False
+            xlWorkBook = xlApp.Workbooks.Add
+            xlWorkSheet = xlWorkBook.Sheets(1)
+
+            If dtFromData.Rows.Count > 0 Then
+                drDataOrg = dtFromData.Rows(0)
+            End If
+
+
+            i = 1
+            For Each dcCol In dtFromData.Columns
+                xlWorkSheet.Cells(1, i) = dcCol.Caption
+                If dtFromData.Rows.Count > 0 Then
+                    xlWorkSheet.Cells(2, i) = drDataOrg.Item(i - 1)
+                End If
+                i += 1
+            Next
+            xlWorkBook.SaveAs(strFileName)
+            xlWorkSheet = Nothing
+            xlWorkBook.Close()
+            xlWorkBook = Nothing
+            xlApp.Quit()
+            xlApp = Nothing
+
+
+            If dtFromData.Rows.Count > 0 Then
+
+
+
+                Connection_String = ConnectionString(strFileName)
+
+                cnConnection = New OleDb.OleDbConnection(ConnectionString(strFileName))
+                cnConnection.Open()
+
+
+
+                '看看数据源中的列数
+                intHowManyCol = dtFromData.Columns.Count
+
+                '创建插入语句的语句(对应变量)
+                For i = 1 To intHowManyCol
+                    strTmpValues = strTmpValues & " @T" & i & " ,"
+
+                Next i
+                strTmpValues = strTmpValues.Substring(0, strTmpValues.Length - 1)
+
+
+
+                '--------------弄个新的Datatable----------
+                dtData = ReturnNewNormalDT(dtFromData, dtFromData)
+
+
+                '对应数据源与SQL语句
+                'Dim cmd As New OleDbCommand("INSERT INTO  [" & strSheetName & "$]  VALUES (" & strTmpValues & ")", cnConnection)
+
+                Dim cmd = New OleDbCommand("INSERT INTO  [" & strSheetName & "$]  VALUES (" & strTmpValues & ")", cnConnection)
+                With cmd
+                    .CommandType = CommandType.Text
+                    For i = 1 To intHowManyCol
+                        .Parameters.Add(New OleDb.OleDbParameter("@T" & i, TranType2OLE(dtData.Columns(i - 1).DataType.ToString)))
+                        .Parameters("@T" & i).SourceColumn = dtData.Columns(i - 1).ColumnName
+                    Next i
+
+                End With
+                '插入!!
+                adaptData.InsertCommand = cmd
+                Dim builder As New OleDbCommandBuilder(adaptData)
+                builder.QuotePrefix = "["
+                builder.QuoteSuffix = "]"
+                adaptData.Update(dtData)
+                cnConnection.Close()
+
+
+            End If
+
+            xlApp = New Excel.Application
+            xlApp.DisplayAlerts = False
+            xlWorkBook = xlApp.Workbooks.Open(strFileName)
+            xlWorkSheet = xlWorkBook.Sheets(1)
+
+            xlWorkSheet.Rows(2).Delete
+            xlWorkBook.Save()
+            xlWorkSheet = Nothing
+            xlWorkBook.Close()
+            xlWorkBook = Nothing
+            xlApp.Quit()
+            xlApp = Nothing
+
+
+
+        Catch ex As Exception
+            _LastException = ex
+            Success = False
+        Finally
+
+            If Not xlWorkSheet Is Nothing Then
+                Marshal.FinalReleaseComObject(xlWorkSheet)
+                xlWorkSheet = Nothing
+            End If
+
+            If Not xlWorkBook Is Nothing Then
+                Marshal.FinalReleaseComObject(xlWorkBook)
+                xlWorkBook = Nothing
+            End If
+
+            If Not xlApp Is Nothing Then
+                Marshal.FinalReleaseComObject(xlApp)
+                xlApp = Nothing
+            End If
+            If cnConnection IsNot Nothing Then
+                If ((cnConnection.State = ConnectionState.Open)) Then
+                    cnConnection.Close()
+                End If
+
+            End If
+
+        End Try
+        Return Success
+    End Function
+
+    ''' <summary>
+    ''' 根据给出的格式表返回根据格式表格式的数据
+    ''' </summary>
+    ''' <param name="dtData">数据表</param>
+    ''' <param name="dtFormat">格式表</param>
+    ''' <returns></returns>
+    ''' <remarks></remarks>
+    Private Function ReturnNewNormalDT(ByVal dtData As DataTable, ByVal dtFormat As DataTable) As DataTable
+        Dim intHowManyCol As Integer
+        Dim i As Integer
+        Dim j As Integer
+        Dim dtDataNew As New DataTable
+        Dim drTmp As DataRow
+        Dim intTmpListOfTitle() As Integer
+
+
+        ReDim intTmpListOfTitle(0 To (dtData.Columns.Count - 1))
+
+
+        '读取格式表的列数
+        intHowManyCol = dtFormat.Columns.Count
+
+        '创建新数据表的列标题以及数据类型
+        For i = 1 To intHowManyCol
+            dtDataNew.Columns.Add(New System.Data.DataColumn(dtFormat.Columns(i - 1).ColumnName, dtFormat.Columns(i - 1).DataType))
+        Next i
+
+
+        intHowManyCol = dtData.Columns.Count
+
+        For i = 1 To intHowManyCol
+            intTmpListOfTitle(i - 1) = dtFormat.Columns(dtData.Columns(i - 1).ColumnName).Ordinal
+        Next i
+
+
+
+
+        '每行数据表的来读
+        For i = 1 To dtData.Rows.Count
+            drTmp = dtDataNew.NewRow
+            For j = 1 To dtData.Columns.Count
+                Try
+                    If dtData.Rows(i - 1).Item(j - 1).ToString = "" Or dtData.Rows(i - 1).Item(j - 1).ToString = "#DIV/0" Then
+                        drTmp(intTmpListOfTitle(j - 1)) = DBNull.Value
+                    Else
+                        drTmp(intTmpListOfTitle(j - 1)) = dtData.Rows(i - 1).Item(j - 1)
+                    End If
+                Catch
+                    drTmp(intTmpListOfTitle(j - 1)) = DBNull.Value
+                End Try
+            Next j
+            dtDataNew.Rows.Add(drTmp)
+        Next i
+
+        Return dtDataNew
+    End Function
+
+
+    ''' <summary>
+    ''' 把.Net数据类型编程OLE数据类型
+    ''' </summary>
+    ''' <param name="strTable"></param>
+    ''' <returns>返回OLE的数据类型</returns>
+    Private Function TranType2OLE(ByVal strTable As String) As OleDbType
+        If strTable = "System.Int32" Then
+            Return OleDb.OleDbType.Integer
+        ElseIf strTable = "System.String" Then
+            Return OleDb.OleDbType.VarChar
+        ElseIf strTable = "System.Double" Then
+            Return OleDb.OleDbType.Double
+        ElseIf strTable = "System.DateTime" Then
+            Return OleDb.OleDbType.Date
+        ElseIf strTable = "System.Single" Then
+            Return OleDb.OleDbType.Single
+        End If
+        Return OleDb.OleDbType.Error
+    End Function
+
+
 
     Public Function GetData(ByVal strTableName As String) As DataTable
         Dim dtExl As New DataTable
@@ -133,6 +349,29 @@ Public Class LoadExcel
         Dim Connection_String As String = ""
         Connection_String = ConnectionString(strFileName)
         strSelectStatement = "SELECT * FROM [" & strTableName & "$]"
+
+        Try
+            Using cn As New OleDbConnection With {.ConnectionString = Connection_String}
+                Using cmd As New OleDbCommand With {.Connection = cn, .CommandText = strSelectStatement}
+                    cn.Open()
+                    dtExl.Load(cmd.ExecuteReader)
+                End Using
+            End Using
+        Catch ex As Exception
+            strExceptionMessage = ex.Message
+        End Try
+
+        Return dtExl
+    End Function
+
+
+    Public Function ReturnFormat(ByVal strTable As String) As DataTable
+        Dim dtExl As New DataTable
+        Dim strSelectStatement As String
+
+        Dim Connection_String As String = ""
+        Connection_String = ConnectionString(strFileName)
+        strSelectStatement = "SELECT top 1 * FROM [" & strTable & "$]"
 
         Try
             Using cn As New OleDbConnection With {.ConnectionString = Connection_String}
