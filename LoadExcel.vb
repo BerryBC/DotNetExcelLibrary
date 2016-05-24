@@ -10,7 +10,6 @@ Public Class LoadExcel
 
     Private strFileName As String
     Public strSheets As New List(Of String)
-    Private strExceptionMessage As String
 
 
 
@@ -30,25 +29,26 @@ Public Class LoadExcel
 
     Private Function ConnectionString(ByVal FileName As String) As String
         Dim Builder As New OleDb.OleDbConnectionStringBuilder
-        If IO.Path.GetExtension(FileName).ToUpper = ".XLS" Then
-            Builder.Provider = "Microsoft.Jet.OLEDB.4.0"
-            Builder.Add("Extended Properties", "Excel 8.0;IMEX=6;HDR=Yes;")
-        ElseIf IO.Path.GetExtension(FileName).ToUpper = ".XLSX" Then
-            Builder.Provider = "Microsoft.ACE.OLEDB.12.0"
-            Builder.Add("Extended Properties", "Excel 12.0;IMEX=6;HDR=Yes;")
-        End If
+        Try
 
-        Builder.DataSource = FileName
 
-        Return Builder.ToString
+            If IO.Path.GetExtension(FileName).ToUpper = ".XLS" Then
+                Builder.Provider = "Microsoft.Jet.OLEDB.4.0"
+                Builder.Add("Extended Properties", "Excel 8.0;IMEX=6;HDR=Yes;")
+            ElseIf IO.Path.GetExtension(FileName).ToUpper = ".XLSX" Then
+                Builder.Provider = "Microsoft.ACE.OLEDB.12.0"
+                Builder.Add("Extended Properties", "Excel 12.0;IMEX=6;HDR=Yes;")
+            End If
+
+            Builder.DataSource = FileName
+
+            Return Builder.ToString
+        Catch ex As Exception
+            Throw New Exception(ex.Message, ex)
+        End Try
+        Return ""
 
     End Function
-
-    Public ReadOnly Property ExceptionMessage As String
-        Get
-            Return strExceptionMessage
-        End Get
-    End Property
 
 
 
@@ -60,22 +60,24 @@ Public Class LoadExcel
     ''' <remarks></remarks>
     Public Function GetInformation() As Boolean
         Dim Success As Boolean = True
-
-        If Not IO.File.Exists(strFileName) Then
-            Dim ex As New Exception("Failed to locate '" & strFileName & "'")
-            _LastException = ex
-            Throw ex
-        End If
-
-        strSheets.Clear()
-
-
         Dim xlApp As Excel.Application = Nothing
         Dim xlWorkBooks As Excel.Workbooks = Nothing
         Dim xlWorkBook As Excel.Workbook = Nothing
         Dim xlWorkSheets As Excel.Sheets = Nothing
 
         Try
+
+
+            If Not IO.File.Exists(strFileName) Then
+                Dim ex As New Exception("Failed to locate '" & strFileName & "'")
+                _LastException = ex
+                Throw ex
+            End If
+
+            strSheets.Clear()
+
+
+
             xlApp = New Excel.Application
             xlApp.DisplayAlerts = False
             xlWorkBooks = xlApp.Workbooks
@@ -96,8 +98,7 @@ Public Class LoadExcel
             xlApp.Quit()
 
         Catch ex As Exception
-            _LastException = ex
-            Success = False
+            Throw New Exception(ex.Message, ex)
         Finally
 
             If Not xlWorkSheets Is Nothing Then
@@ -124,6 +125,91 @@ Public Class LoadExcel
         Return Success
 
     End Function
+
+
+    Public Function SaveToExistsFile(ByRef dtFromData As DataTable, ByRef strSheetName As String) As Boolean
+        Dim Success As Boolean = True
+        Dim i As Integer
+        Dim Connection_String As String = ""
+        Dim intHowManyCol As Integer
+        Dim strTmpValues As String = ""
+        Dim cnConnection As OleDb.OleDbConnection
+        Dim adaptData As New OleDbDataAdapter
+        Dim dtData As DataTable
+
+        Try
+
+            If dtFromData.Rows.Count > 0 Then
+
+
+
+                Connection_String = ConnectionString(strFileName)
+
+                cnConnection = New OleDb.OleDbConnection(ConnectionString(strFileName))
+                cnConnection.Open()
+
+
+
+                '看看数据源中的列数
+                intHowManyCol = dtFromData.Columns.Count
+
+                '创建插入语句的语句(对应变量)
+                For i = 1 To intHowManyCol
+                    strTmpValues = strTmpValues & " @T" & i & " ,"
+
+                Next i
+                strTmpValues = strTmpValues.Substring(0, strTmpValues.Length - 1)
+
+
+
+                '--------------弄个新的Datatable----------
+                dtData = ReturnNewNormalDT(dtFromData, dtFromData)
+
+
+                '对应数据源与SQL语句
+                'Dim cmd As New OleDbCommand("INSERT INTO  [" & strSheetName & "$]  VALUES (" & strTmpValues & ")", cnConnection)
+
+                Dim cmd = New OleDbCommand("INSERT INTO  [" & strSheetName & "$]  VALUES (" & strTmpValues & ")", cnConnection)
+                With cmd
+                    .CommandType = CommandType.Text
+                    For i = 1 To intHowManyCol
+                        .Parameters.Add(New OleDb.OleDbParameter("@T" & i, TranType2OLE(dtData.Columns(i - 1).DataType.ToString)))
+                        .Parameters("@T" & i).SourceColumn = dtData.Columns(i - 1).ColumnName
+                    Next i
+
+                End With
+                '插入!!
+                adaptData.InsertCommand = cmd
+                Dim builder As New OleDbCommandBuilder(adaptData)
+                builder.QuotePrefix = "["
+                builder.QuoteSuffix = "]"
+                adaptData.Update(dtData)
+                cnConnection.Close()
+
+
+            End If
+
+
+
+
+        Catch ex As Exception
+            Throw New Exception(ex.Message, ex)
+        Finally
+
+            If cnConnection IsNot Nothing Then
+                If ((cnConnection.State = ConnectionState.Open)) Then
+                    cnConnection.Close()
+                End If
+
+            End If
+
+        End Try
+        Return Success
+    End Function
+
+
+
+
 
     Public Function SaveAsNewFromDatatable(ByRef dtFromData As DataTable, ByRef strSheetName As String) As Boolean
         Dim Success As Boolean = True
@@ -233,8 +319,7 @@ Public Class LoadExcel
 
 
         Catch ex As Exception
-            _LastException = ex
-            Success = False
+            Throw New Exception(ex.Message, ex)
         Finally
 
             If Not xlWorkSheet Is Nothing Then
@@ -277,45 +362,49 @@ Public Class LoadExcel
         Dim drTmp As DataRow
         Dim intTmpListOfTitle() As Integer
 
-
-        ReDim intTmpListOfTitle(0 To (dtData.Columns.Count - 1))
-
-
-        '读取格式表的列数
-        intHowManyCol = dtFormat.Columns.Count
-
-        '创建新数据表的列标题以及数据类型
-        For i = 1 To intHowManyCol
-            dtDataNew.Columns.Add(New System.Data.DataColumn(dtFormat.Columns(i - 1).ColumnName, dtFormat.Columns(i - 1).DataType))
-        Next i
+        Try
 
 
-        intHowManyCol = dtData.Columns.Count
-
-        For i = 1 To intHowManyCol
-            intTmpListOfTitle(i - 1) = dtFormat.Columns(dtData.Columns(i - 1).ColumnName).Ordinal
-        Next i
+            ReDim intTmpListOfTitle(0 To (dtData.Columns.Count - 1))
 
 
+            '读取格式表的列数
+            intHowManyCol = dtFormat.Columns.Count
+
+            '创建新数据表的列标题以及数据类型
+            For i = 1 To intHowManyCol
+                dtDataNew.Columns.Add(New System.Data.DataColumn(dtFormat.Columns(i - 1).ColumnName, dtFormat.Columns(i - 1).DataType))
+            Next i
 
 
-        '每行数据表的来读
-        For i = 1 To dtData.Rows.Count
-            drTmp = dtDataNew.NewRow
-            For j = 1 To dtData.Columns.Count
-                Try
-                    If dtData.Rows(i - 1).Item(j - 1).ToString = "" Or dtData.Rows(i - 1).Item(j - 1).ToString = "#DIV/0" Then
+            intHowManyCol = dtData.Columns.Count
+
+            For i = 1 To intHowManyCol
+                intTmpListOfTitle(i - 1) = dtFormat.Columns(dtData.Columns(i - 1).ColumnName).Ordinal
+            Next i
+
+
+
+
+            '每行数据表的来读
+            For i = 1 To dtData.Rows.Count
+                drTmp = dtDataNew.NewRow
+                For j = 1 To dtData.Columns.Count
+                    Try
+                        If dtData.Rows(i - 1).Item(j - 1).ToString = "" Or dtData.Rows(i - 1).Item(j - 1).ToString = "#DIV/0" Then
+                            drTmp(intTmpListOfTitle(j - 1)) = DBNull.Value
+                        Else
+                            drTmp(intTmpListOfTitle(j - 1)) = dtData.Rows(i - 1).Item(j - 1)
+                        End If
+                    Catch
                         drTmp(intTmpListOfTitle(j - 1)) = DBNull.Value
-                    Else
-                        drTmp(intTmpListOfTitle(j - 1)) = dtData.Rows(i - 1).Item(j - 1)
-                    End If
-                Catch
-                    drTmp(intTmpListOfTitle(j - 1)) = DBNull.Value
-                End Try
-            Next j
-            dtDataNew.Rows.Add(drTmp)
-        Next i
-
+                    End Try
+                Next j
+                dtDataNew.Rows.Add(drTmp)
+            Next i
+        Catch ex As Exception
+            Throw New Exception(ex.Message, ex)
+        End Try
         Return dtDataNew
     End Function
 
@@ -358,7 +447,7 @@ Public Class LoadExcel
                 End Using
             End Using
         Catch ex As Exception
-            strExceptionMessage = ex.Message
+            Throw New Exception(ex.Message, ex)
         End Try
 
         Return dtExl
@@ -381,7 +470,7 @@ Public Class LoadExcel
                 End Using
             End Using
         Catch ex As Exception
-            strExceptionMessage = ex.Message
+            Throw New Exception(ex.Message, ex)
         End Try
 
         Return dtExl
